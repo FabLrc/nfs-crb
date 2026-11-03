@@ -3361,10 +3361,13 @@ void sched_checkpoint() {
     // Test75: the stride is counted before anything else, so 15 of 16 calls return without touching
     // a thread-local (each one is a _tlv_get_addr call on macOS). The counter is shared: only the
     // baton holder runs guest code, and a lost increment would only move a yield by one call.
+    // 2026-11-03, the browser: every 256th call. On Windows (Edge) each read still cost ~0.4 us
+    // and ~1.2% of the game thread at 64. A waiting free-run thread no longer depends on the
+    // stride (g_baton_wanted below), so only the 1 ms slice moves, by at most ~150 us.
     static const uint32_t stride_mask = [] {
         const char *e = recomp_env("SCHED_CHECKPOINT_STRIDE");
 #ifdef __EMSCRIPTEN__
-        return (e && !strcmp(e, "1")) ? 0u : 63u;
+        return (e && !strcmp(e, "1")) ? 0u : 255u;
 #else
         return (e && !strcmp(e, "1")) ? 0u : 15u;
 #endif
@@ -3375,17 +3378,18 @@ void sched_checkpoint() {
     // takes it back from free run first), and the baton handoff orders the accesses.
     static uint32_t calls = 0;
     const uint32_t n = ++calls;
-    if ((n & (recomp_ab::old(recomp_ab::STRIDE) ? 0u : stride_mask)) != 0)
+    // A thread back from free run is waiting for the baton: hand it over now, slice or stride
+    // not (sched_free_run_leave). It asks once per free-run call and gives the baton back at its
+    // own slice's end, so this cannot starve the holder. Read on every call: an atomic load is a
+    // plain load on x86 and ARM, unlike the clock.
+    const bool wanted = g_baton_wanted.load(std::memory_order_relaxed) != 0;
+    if (!wanted && (n & (recomp_ab::old(recomp_ab::STRIDE) ? 0u : stride_mask)) != 0)
         return;
     if (threads().size() < 2 || t_atomic)
         return;
     GuestThread *me = threads()[t_self];
     double now = sched_now();
-    // A thread back from free run is waiting for the baton: hand it over now, slice or not
-    // (sched_free_run_leave). It asks once per free-run call and gives the baton back at its
-    // own slice's end, so this cannot starve the holder.
-    if (now - me->last_yield < SCHED_SLICE_SECONDS &&
-        !g_baton_wanted.load(std::memory_order_relaxed))
+    if (now - me->last_yield < SCHED_SLICE_SECONDS && !wanted)
         return;
     me->last_yield = now;
     guest_yield();
