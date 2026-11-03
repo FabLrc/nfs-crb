@@ -71,6 +71,18 @@ const params = new URLSearchParams({ RECOMP_D3D9_STATS: "1", RECOMP_FRAME_LIMIT:
 for (const kv of opt.env) { const i = kv.indexOf("="); params.set(kv.slice(0, i), kv.slice(i + 1)); }
 const gameUrl = `${opt.url}?${params}`;
 
+// The port answers while a browser of an earlier run is still there (--keep-open, or Edge on
+// Windows, which outlives the process it was started with): close it first, or this run's page
+// shares the machine with that game and the bench may even attach to the old tab.
+const portUp = async () => { try { return (await (await fetch(`http://127.0.0.1:${opt.port}/json/version`)).json()).webSocketDebuggerUrl; } catch { return null; } };
+async function closeBrowser(url) {
+  const s = new WebSocket(url);
+  await new Promise((r) => { s.onopen = r; s.onerror = r; });
+  try { s.send(JSON.stringify({ id: 1, method: "Browser.close" })); } catch {}
+  for (let i = 0; i < 75 && await portUp(); i++) await sleep(200);
+}
+{ const old = await portUp(); if (old) { log("closing the browser left by an earlier run"); await closeBrowser(old); } }
+
 const chrome = spawn(opt.chrome, [
   // WebGPU is on by default; --enable-unsafe-webgpu would add an infobar that shrinks the page.
   `--user-data-dir=${opt.userDataDir}`, `--remote-debugging-port=${opt.port}`,
@@ -78,14 +90,17 @@ const chrome = spawn(opt.chrome, [
   // A covered or unfocused window must not be throttled while it is measured.
   "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
   "--disable-backgrounding-occluded-windows", "--window-size=1240,900",
-  // Windows: a covered window stops presenting (about 1 fps) despite the flags above.
+  // Windows: Chromium's own occlusion tracking, which the flag above does not cover.
   ...(process.platform === "win32" ? ["--disable-features=CalculateNativeWinOcclusion"] : []),
   "about:blank",
 ], { stdio: "ignore" });
-// The next run reuses the profile and the port: wait until this Chrome has really gone.
+// The next run reuses the profile and the port: wait until this browser has really gone. Killing
+// the process is not enough for Edge on Windows, so it is asked to close over DevTools first.
 const exited = new Promise((r) => chrome.once("exit", r));
 const quit = async () => {
   if (opt.keepOpen) return;
+  const url = await portUp();
+  if (url) await closeBrowser(url);
   chrome.kill();
   await Promise.race([exited, sleep(15000)]);
 };
@@ -131,6 +146,10 @@ await send("Page.enable", {}, page);
 await send("Runtime.enable", {}, page);
 await send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: false, flatten: true }, page);
 await send("Emulation.setDeviceMetricsOverride", { width: 1200, height: 736, deviceScaleFactor: 2, mobile: false }, page);
+// The page keeps input focus even when the window does not get the foreground (Windows refuses
+// it to a window opened from the background): without it the game ignores the clicks.
+await send("Emulation.setFocusEmulationEnabled", { enabled: true }, page);
+await send("Page.bringToFront", {}, page);
 await send("Network.enable", {}, page);
 await send("Network.setCacheDisabled", { cacheDisabled: true }, page); // always the build on disk
 await send("Page.navigate", { url: gameUrl }, page);
@@ -182,6 +201,7 @@ const until = async (what, test, seconds, every = 1000) => {
 // ---- menus ----
 if (!await until("title", async () => (await frameCount().catch(() => 0)) > 300, 240, 2000)) await fail("the game never presented frames");
 log("title screen; continuing");
+await sleep(3000); // a click right at the first frames can come before the title takes input
 await click(600, 460);
 // "Load complete" (~500 draws) after the profile loads; Continue, then cancel the EA Nation
 // dialog (~600 draws) that the offline game raises right after it.
@@ -189,9 +209,11 @@ if (!await until("load", async () => (await draws()) > 450, 90, 2000)) await fai
 await sleep(3000);
 await press("Enter", 6000);
 let menu = false;
-for (let attempt = 0; attempt < 4 && !menu; attempt++) {
+for (let attempt = 0; attempt < 6 && !menu; attempt++) {
   const d = await draws();
-  if (d > 570) { log(`EA Nation dialog (${d.toFixed(0)} draws); cancelling`); await press("Enter", 6000); }
+  // The title screen draws as many as the dialog: a click that came too early (a fast machine)
+  // left the game there. The click again moves on from the title and misses the dialog's button.
+  if (d > 570) { log(`EA Nation dialog or title (${d.toFixed(0)} draws); clicking, cancelling`); await click(600, 460); await sleep(1500); await press("Enter", 6000); }
   else if (d < 508) { log(`still on Load complete (${d.toFixed(0)} draws); Continue`); await press("Enter", 6000); }
   else menu = true;
 }
