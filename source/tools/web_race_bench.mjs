@@ -65,7 +65,8 @@ for (const kv of opt.env) { const i = kv.indexOf("="); params.set(kv.slice(0, i)
 const gameUrl = `${opt.url}?${params}`;
 
 const chrome = spawn(opt.chrome, [
-  `--user-data-dir=${opt.userDataDir}`, `--remote-debugging-port=${opt.port}`, "--enable-unsafe-webgpu",
+  // WebGPU is on by default; --enable-unsafe-webgpu would add an infobar that shrinks the page.
+  `--user-data-dir=${opt.userDataDir}`, `--remote-debugging-port=${opt.port}`,
   "--autoplay-policy=no-user-gesture-required", "--no-first-run", "--no-default-browser-check",
   // A covered or unfocused window must not be throttled while it is measured.
   "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
