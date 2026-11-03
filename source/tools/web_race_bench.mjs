@@ -23,17 +23,24 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// Chrome's usual install place on each system; --chrome overrides it.
+const defaultChrome = process.platform === "win32"
+  ? join(process.env.PROGRAMFILES || "C:\\Program Files", "Google\\Chrome\\Application\\chrome.exe")
+  : process.platform === "darwin" ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+  : "google-chrome";
 
 // ---- options ----
 const argv = process.argv.slice(2);
 const opt = {
   label: "run", seconds: 45, settle: 5, fpsCap: "120", env: [], throttle: false, profile: true,
   keepOpen: false, url: "http://localhost:8000/nfsc/", port: 9333,
-  chrome: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-  userDataDir: "/tmp/nfsc-chrome", symbols: join(ROOT, "build/web/recomp/CarbonRecomp.js.symbols"),
+  chrome: defaultChrome,
+  // A profile of its own, kept between runs: the streamed game files stay cached in it.
+  userDataDir: join(tmpdir(), "nfsc-chrome"), symbols: join(ROOT, "build/web/recomp/CarbonRecomp.js.symbols"),
   out: join(ROOT, "build/bench"),
 };
 for (let i = 0; i < argv.length; i++) {

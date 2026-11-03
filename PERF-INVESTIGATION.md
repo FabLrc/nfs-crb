@@ -2,12 +2,68 @@
 
 Journal de travail de la branche `perf/measurement`. Il donne l'état, les mesures avant/après, la méthode de chaque mesure et les pistes restantes, pour reprendre le travail ailleurs. Mis à jour à chaque étape. Les plus récentes sont en bas de « Journal ».
 
-Point de départ : conversation « pistes d'optimisation » (projets comparables : NFSU2 navigateur, Cricket 07, d3d9-webgl) et le commit `2c4c705` de `main`.
+Point de départ : la conversation « pistes d'optimisation » (https://claude.ai/share/85085aed-bd88-42b6-b50b-ebbff98dd01c ; projets comparables : NFSU2 navigateur, Cricket 07, d3d9-webgl) et le commit `2c4c705` de `main`. Ses pistes ont été vérifiées sur le code : la plupart des optimisations de rendu de NFSU2 sont déjà en place (rendu sur un thread séparé, caches de pipelines et de bind groups, textures BC, tables de saut en switch). Le reste est classé dans « Suite proposée ».
 
-## Environnement de mesure
+## Reprendre le travail (autre poste, nouvel agent)
 
-- Mac Apple Silicon, Chrome 156, build web Release (`source/tools/build.py --target web`).
-- Serveur local et streaming des fichiers du jeu depuis `assets.nfscrb.xyz` : voir `LOCAL-TESTING.md`. Ce fichier est **personnel et non versionné** (`.git/info/exclude`), il faut le copier sur l'autre poste. Après chaque build, il faut refaire son étape 4 (`games.json` et `worker.js`) : `build.py` réécrit `build/web-site/`.
+**État au 3 novembre 2026.** Branche `perf/measurement`, partie de `main` (`2c4c705`) ; `git log main..perf/measurement` liste les commits. Seuls 3 commits modifient le jeu :
+- `631e0f7` : deux routines audio sont maintenant traduites au lieu d'être interprétées ;
+- `0e368f0` : deux hooks de customisation sont filtrés par site d'appel ;
+- `f451be2` : entrées correspondantes dans le changelog.
+
+Les autres sont des outils de mesure et ce journal.
+
+À faire avant de reprendre :
+1. **Récupérer la branche.** Elle n'existe que sur le Mac d'origine tant qu'elle n'est pas poussée : `git push -u origin perf/measurement` depuis ce Mac, puis `git fetch && git switch perf/measurement` sur l'autre poste.
+2. **Vérification visuelle jamais faite** : en course, avec des jantes ou pneus personnalisés et un carrossage (stance) modifié, les roues doivent s'afficher comme sur `main` (commit `0e368f0`).
+3. **Mettre en place la build web locale**, voir ci-dessous.
+
+### Build web et serveur local
+
+La procédure complète est dans `LOCAL-TESTING.md`. Ce fichier est **personnel et non versionné** (`.git/info/exclude`) : il faut le copier depuis le Mac. Il est écrit pour macOS ; sur Windows, il faut adapter :
+
+| macOS (`LOCAL-TESTING.md`) | Windows |
+|---|---|
+| `source ~/emsdk/emsdk_env.sh` | `emsdk_env.bat` (cmd) ou `emsdk_env.ps1` (PowerShell) |
+| `source/.venv/bin/python` | `source\.venv\Scripts\python.exe` |
+| `shasum -a 256` | `certutil -hashfile NFSC.exe SHA256` |
+| `~/Library/NFSC-Native-Setup/` (Ghidra, JDK) | Chemins affichés par `tools/fetch_tools.py` |
+| `/tmp/nfsc-serve.py` (serveur avec proxy vers `assets.nfscrb.xyz`) | Même script Python, enregistré où on veut |
+
+Ordre : récupérer `NFSC.exe` et les DLL, `setup.py --link-only`, `rebase_pe.py`, `analyze.py` (environ 8 min), puis `tools/build.py --target web --regenerate`. La première build prend environ 13 à 25 min ; une build sans `--regenerate` environ 1 à 2 min.
+
+**Après chaque build**, `build.py` réécrit `build/web-site/`. Il faut alors réappliquer l'étape 4 de `LOCAL-TESTING.md` : streaming distant dans `games.json`, HTTP accepté sur localhost dans `worker.js`. Ce script la refait. Il attend le `games.json` de la release publiée, téléchargé une fois dans `g.json` à côté de lui (voir `LOCAL-TESTING.md` pour l'URL).
+
+```python
+# patch_site.py <dossier build/web-site> <g.json de la release>
+import json, sys, os
+site, release = sys.argv[1], sys.argv[2]
+rel = json.load(open(release))[0]
+g = json.load(open(os.path.join(site, 'games.json'))); e = g[0]
+for k in ('downloadBytes', 'streamAssets', 'streamPreparationScript'):
+    e[k] = rel[k]
+e['downloadManifest'] = '/remote/local-game/manifest.json'
+json.dump(g, open(os.path.join(site, 'games.json'), 'w'), indent=2)
+p = os.path.join(site, 'worker.js'); s = open(p).read()
+old = 'if (remote && url.protocol !== "https:")'
+new = 'if (remote && url.protocol !== "https:" && url.hostname !== "localhost")'
+if new not in s:
+    assert old in s, "worker.js pattern missing"
+    s = s.replace(old, new)
+open(p, 'w').write(s)
+print("patched")
+```
+
+### Outils de mesure sur Windows
+
+- `web_race_bench.mjs` demande **Bun** (ou Node 22 et plus). Il trouve Chrome à sa place habituelle (`%ProgramFiles%\Google\Chrome\Application\chrome.exe`), sinon il faut passer `--chrome`. Son profil Chrome est `%TEMP%\nfsc-chrome` : le premier lancement télécharge les fichiers du jeu.
+- `web_race_ab.sh` est un script `sh` : il faut le lancer depuis Git Bash.
+- La variance mesurée ici vient du Mac (cœurs performance et efficacité, App Nap). Il faut la **remesurer sur le PC** : 3 ou 4 exécutions de la même build, en comparant les fps et la part de free run audio. Les processeurs Intel récents (12e génération et plus) ont aussi des cœurs efficacité. Le mode d'alimentation « Performances optimales » et la fenêtre au premier plan limitent le problème.
+- Les noms des fonctions wasm viennent de `build/web/recomp/CarbonRecomp.js.symbols`, propre à chaque build. Il faut le garder avec chaque build qu'on compare.
+
+## Environnement de mesure (Mac d'origine)
+
+- Mac Apple Silicon, Chrome 156, build web Release.
 - Il faut fermer le jeu pendant les compilations : il prend du CPU.
 
 ## Outils (sur la branche)
@@ -196,23 +252,61 @@ defaults write com.google.Chrome NSAppSleepDisabled -bool YES   # retour : defau
 
 La variance reste aussi forte sans App Nap (15 à 43 fps sur la même build). Une cause encore non identifiée subsiste : priorité des threads d'une app en arrière-plan, température, ou scène (le nombre de draws varie de 1 740 à 1 990 avec la caméra d'attente). Pendant un bench, mieux vaut garder la fenêtre au premier plan.
 
-## Pistes restantes
+## Suite proposée
 
-Classées par ordre de rentabilité.
+Dans cet ordre. Chaque étape doit se mesurer avec une méthode **insensible à la vitesse des cœurs** : part des fonctions dans le profil (le rapport du bench donne self et inclusif), comptages (`RECOMP_IMPORT_RATES`), ou A/B dans la même partie (`RECOMP_AB_PERIOD`). Il faut noter dans ce journal les mesures avant et après, la commande utilisée et la build comparée.
 
-**C. Couche de traduction sur le thread de jeu**, à valider par profil avant/après, et par A/B dans la même partie si c'est activable à l'exécution :
-1. Effets D3DX/FX (6,9 %) : `share_parameter`, `bind_constants_impl`, `apply_state`, `shared_setter<Fx_SetMatrix>`, `Fx_CommitChanges`.
-2. Dispatch (6,1 %) : `recomp_call` (appels indirects), le surcoût par appel de `imports_dispatch_holding`, `recomp_module_call`.
-3. `fe_render_hook` (cumulé 3,8 %) : hook REPLACE sur chaque objet d'interface dessiné (`005b0920`, `mods/core/nfsc/fe_pad.h`).
-4. `sched_checkpoint` : une lecture d'horloge (`performance.now()` via JS) par appel d'import, à espacer comme `RECOMP_SCHED_CHECKPOINT_STRIDE`.
-5. D3D9 (6 %) : `gpu_draw`, `queue_draw`, `gpu_sync`.
+### Étape 0 : sur le nouveau poste
 
-**A. Accélérer l'interpréteur pour les routines audio EA**, gain estimé environ +3 % de fps. Chaque appel paie un mutex, une table et un `memcmp` de toute la routine (vérification de code modifié), puis interprète environ 300 `MOV`. Pistes : cache par cible sans verrou, et `memcmp` remplacé par une génération ou un hash.
+- Build de `perf/measurement`, puis 3 ou 4 benchs de la même build pour connaître la variance du poste.
+- Vérification visuelle des roues personnalisées (point 2 de « Reprendre le travail »).
 
-**B. Traduire ces routines à l'avance, reconnues par leur contenu**, gain estimé +6–8 %. Il faut normaliser les `call rel32` vers des cibles absolues, puis identifier les routines par hash.
+### Étape 1 : alléger le dispatch des imports
 
-**Prérequis pour tout travail au niveau du traducteur** : un banc déterministe, voir la leçon du point 8.
+Gain attendu : 2 à 4 % du thread de jeu.
 
-**Clôturées** : `-O2` sur `gpu_backend`, suppression de la limite de fps pour les joueurs, free run de `0089e2e3`, `restrict` sur le contexte (pas de gain mesurable, et risqué).
+Constat (point 7 du journal) : 2 millions d'appels par seconde, environ 30 ns de surcoût chacun hors shim. `imports_dispatch_holding` pèse 4,2 % en temps propre, `sched_checkpoint` 1,4 %.
 
-**Non traitées** (voir la conversation de départ) : `-msimd128`, registres en variables locales dans `translate.py`, analyse globale des flags, création asynchrone des pipelines.
+Fichiers : `source/kit/runtime/imports.cpp` (`imports_dispatch_holding`) et `kernel32.cpp` (`sched_checkpoint`).
+
+Idées :
+- lire une seule fois l'entrée de `tramps()`. Chaque appel à `tramps()` passe par la garde d'une statique locale, une lecture atomique en wasm avec pthreads, et la fonction l'appelle 5 à 6 fois. Attention : un shim peut agrandir le vecteur, donc il faut relire après `fn(c)` ;
+- ne tester `recomp_ab::old(IMPORTS)` que si `RECOMP_AB_PERIOD` est défini ;
+- regrouper `atomic`, `fn`, `argc` et `calls` dans une table compacte, à part des `std::string` ;
+- dans `sched_checkpoint`, éviter les lectures atomiques séquentielles (en wasm, toutes les opérations atomiques le sont) sur le chemin qui retourne 63 fois sur 64.
+
+Mesure : part de `imports_dispatch_holding` et de `sched_checkpoint` dans le profil du thread de jeu, avant et après. On peut ajouter un interrupteur `RECOMP_AB_SWITCHES` pour un A/B dans la même partie.
+
+### Étape 2 : banc natif déterministe
+
+C'est le prérequis du plus gros levier : le code du jeu fait 57 % du thread de jeu.
+
+Le navigateur ne permet pas de juger un changement de génération de code de moins d'environ 10 % (point 8). Le kit a le harnais : `pop_smoke`, `RECOMP_PIN_CLOCK`, `kit/tools/recomp/performance_run.py`. Il manque un scénario Carbon : un dossier `source/smoke/` avec un script qui va jusqu'en course, dans le format de `kit/host/script.h` (touches, attentes, `expect`). Il faut une build native (`tools/build.py` sans `--target web`).
+
+Objectif : un temps CPU reproductible à ±2 % sur une séquence fixe.
+
+### Étape 3 : chantiers du traducteur
+
+Uniquement avec le banc de l'étape 2, et dans `source/kit/tools/recomp/translate.py`.
+- **Registres x86 en variables locales** plutôt que `c->r[n]`. Il faut les écrire dans `c` avant chaque appel, retour ou import, et les relire après. Cricket 07 annonce environ +30 %.
+- **Analyse globale des flags** : aujourd'hui, tous les flags sont écrits avant chaque saut ou appel. L'outil `--check-flags` sert à estimer le gain.
+- **x87** : chaque empilement écrit `st`, `st_bits`, `st_exact` et le tag.
+- `restrict` a déjà été essayé (point 8) : aucun gain mesurable dans le navigateur, et risqué. À remesurer éventuellement sur le banc natif.
+
+### Étape 4 : interpréteur et routines audio EA sur le tas
+
+Gain attendu : environ +3 à +8 % de fps, d'après la sensibilité mesurée au point 3. Ces routines tournent pendant que le thread audio garde le baton (point 5).
+- **A**, la version simple : dans `interp_call` (`source/kit/runtime/interp.cpp`), retrouver la routine sans mutex ni table, et remplacer le `memcmp` de toute la routine à chaque appel par une génération ou un hash. Mesure : A/B dans la même partie avec un nouvel interrupteur.
+- **B**, la version ambitieuse : traduire ces routines à l'avance, reconnues par leur contenu. Il faut normaliser les `call rel32` vers des cibles absolues, puis faire correspondre par hash.
+
+### Autres pistes, par coût sur le thread de jeu
+
+- Effets D3DX/FX (6,9 %) : `share_parameter`, `bind_constants_impl`, `apply_state`, `shared_setter<Fx_SetMatrix>`, `Fx_CommitChanges`. Il y a 3 168 `SetMatrix` et 1 659 `CommitChanges` par frame.
+- D3D9 (6 %) : `gpu_draw`, `queue_draw`, `gpu_sync`. Il y a 5 932 `SetRenderState` par frame : vérifier que les états redondants sont filtrés le plus tôt possible.
+- Maths D3DX passées par l'import (`D3DXMatrixMultiply` 2 871 par frame, `D3DXVec4Transform` 1 358, `D3DXMatrixTranspose` 822) : les appeler directement, sans dispatch d'import, enlèverait environ 5 000 appels par frame.
+- `fe_render_hook` (3,8 % en cumulé) : hook REPLACE sur chaque objet d'interface dessiné (`005b0920`, `source/mods/core/nfsc/fe_pad.h`).
+- Non traités (voir la conversation de départ) : `-msimd128`, création asynchrone des pipelines WebGPU (saccades à la première apparition d'un effet).
+
+### Clôturées, à ne pas refaire
+
+`-O2` sur `gpu_backend` (point 1), suppression de la limite de fps pour les joueurs (point 2), free run de `0089e2e3` (point 4), `restrict` sur le contexte dans le navigateur (point 8).
