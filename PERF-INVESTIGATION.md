@@ -20,7 +20,7 @@ Les autres sont des outils de mesure et ce journal.
 
 ### Build web et serveur local
 
-La procédure complète est dans `LOCAL-TESTING.md`. Ce fichier est **personnel et non versionné** (`.git/info/exclude`) : il faut le copier depuis le Mac. Il est écrit pour macOS ; sur Windows, il faut adapter :
+La procédure complète est dans `LOCAL-TESTING.md`, à la racine du dépôt (versionné sur cette branche). Elle est écrite pour macOS ; sur Windows, il faut adapter :
 
 | macOS (`LOCAL-TESTING.md`) | Windows |
 |---|---|
