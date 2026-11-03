@@ -14,7 +14,7 @@ Point de départ : la conversation « pistes d'optimisation » (https://claude.a
 Les autres sont des outils de mesure et ce journal.
 
 À faire avant de reprendre :
-1. **Récupérer la branche.** Elle n'existe que sur le Mac d'origine tant qu'elle n'est pas poussée : `git push -u origin perf/measurement` depuis ce Mac, puis `git fetch && git switch perf/measurement` sur l'autre poste.
+1. **Récupérer la branche**, poussée sur `origin` (`github.com/FabLrc/nfs-crb`) : `git fetch && git switch perf/measurement`.
 2. **Vérification visuelle jamais faite** : en course, avec des jantes ou pneus personnalisés et un carrossage (stance) modifié, les roues doivent s'afficher comme sur `main` (commit `0e368f0`).
 3. **Mettre en place la build web locale**, voir ci-dessous.
 
