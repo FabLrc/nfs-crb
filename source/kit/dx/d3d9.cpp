@@ -674,6 +674,7 @@ static struct {
 // on screen.
 void Dev_Present(X86 *c) {
     ComObj *dev = this_device9(c);
+    imports_log_rates(); // RECOMP_IMPORT_RATES only
     {
         static const bool stats = recomp_env("D3D9_STATS") != nullptr;
         static uint32_t presents = 0;
