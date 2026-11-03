@@ -290,6 +290,50 @@ void imports_dump_stats(FILE *out) {
         fprintf(out, "  %8u  %-40s %s\n", t->calls, t->desc.c_str(), t->fn ? "" : "(logging only)");
 }
 
+void imports_log_rates(void) {
+    static const uint64_t period_ns = [] {
+        const char *e = recomp_env("IMPORT_RATES");
+        const long s = e ? strtol(e, nullptr, 10) : 0;
+        return s > 0 ? (uint64_t)s * 1000000000ull : 0ull;
+    }();
+    if (!period_ns)
+        return;
+    static std::vector<uint32_t> last;
+    static uint64_t since = 0, frames = 0;
+    const uint64_t now = os_monotonic_ns();
+    ++frames;
+    if (!since) {
+        since = now;
+        frames = 0;
+        last.clear();
+        for (const Tramp &t : tramps())
+            last.push_back(t.calls);
+        return;
+    }
+    if (now - since < period_ns)
+        return;
+    const double seconds = (double)(now - since) * 1e-9;
+    std::vector<std::pair<uint32_t, size_t>> v; // calls in this period, trampoline
+    uint64_t total = 0;
+    for (size_t i = 0; i < tramps().size(); ++i) {
+        const uint32_t d = tramps()[i].calls - (i < last.size() ? last[i] : 0u);
+        total += d;
+        if (d)
+            v.push_back({d, i});
+    }
+    std::sort(v.begin(), v.end(), [](const auto &a, const auto &b) { return a.first > b.first; });
+    fprintf(stderr, "[recomp] import rates: %.0f calls/s, %.0f per frame over %.1f s (%llu frames)\n",
+            total / seconds, frames ? (double)total / frames : 0.0, seconds, (unsigned long long)frames);
+    for (size_t i = 0; i < v.size() && i < 30; ++i)
+        fprintf(stderr, "[recomp] import rates: %10.0f/s %8.1f/frame  %s\n", v[i].first / seconds,
+                frames ? (double)v[i].first / frames : 0.0, tramps()[v[i].second].desc.c_str());
+    last.clear();
+    for (const Tramp &t : tramps())
+        last.push_back(t.calls);
+    since = now;
+    frames = 0;
+}
+
 void imports_coverage(uint32_t *implemented, uint32_t *logging_only, uint32_t *unknown_argc) {
     uint32_t impl = 0, log_only = 0, unknown = 0;
     for (const Tramp &t : tramps()) {
