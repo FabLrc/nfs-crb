@@ -260,6 +260,10 @@ struct ComObj {
     uint32_t width = 0, height = 0, bpp = 0, pitch = 0;
     uint32_t pixels = 0; // guest address of the pixel memory
     uint32_t pixels_bytes = 0;
+    // A D3DUSAGE_DYNAMIC vertex or index buffer, locked again every frame: its guest copy is kept
+    // between locks (stage_kept, while unlocked) instead of allocated and freed each time.
+    bool dynamic = false;
+    uint32_t stage_kept = 0;
     uint32_t rmask = 0, gmask = 0, bmask = 0, amask = 0;
     uint32_t palette_obj = 0;
     uint32_t clipper_obj = 0;

@@ -780,7 +780,16 @@ static uint32_t stage_lock(ComObj *o) {
     if (o->lock_count == 0)
         gpu_before_lock(o);
     if (o->lock_count++ == 0) {
-        o->pixels = heap_alloc((uint32_t)o->blob.size(), false, 16);
+        // The guest heap is first fit over every free block: a dynamic buffer's tens of KB took
+        // ~40 us to place, three times a frame in a Carbon race (0.8% of the game thread).
+        if (o->stage_kept && heap_size(o->stage_kept) == (uint32_t)o->blob.size()) {
+            o->pixels = o->stage_kept;
+        } else {
+            if (o->stage_kept)
+                heap_free(o->stage_kept);
+            o->pixels = heap_alloc((uint32_t)o->blob.size(), false, 16);
+        }
+        o->stage_kept = 0;
         if (!o->pixels) {
             o->lock_count = 0;
             return 0;
@@ -840,7 +849,10 @@ static void stage_unlock(ComObj *o) {
         }
         if (hi > lo)
             memcpy(o->blob.data() + lo, staged + lo, hi - lo);
-        heap_free(o->pixels);
+        if (o->dynamic)
+            o->stage_kept = o->pixels;
+        else
+            heap_free(o->pixels);
         o->pixels = 0;
         if (hi > lo) {
             d9_raster_invalidate(o->id);
@@ -854,7 +866,10 @@ static void d3d9_resource_destroy(ComObj *o) {
     readback_forget(o);
     if (o->pixels)
         heap_free(o->pixels);
+    if (o->stage_kept)
+        heap_free(o->stage_kept);
     o->pixels = 0;
+    o->stage_kept = 0;
     o->lock_count = 0;
     o->pixels_bytes = 0;
     std::vector<uint8_t>().swap(o->blob);
@@ -1286,6 +1301,7 @@ void Dev_CreateVertexBuffer(X86 *c) {
     }
     vb->dev_d3d = dev->id;
     vb->buf_bytes = bytes;
+    vb->dynamic = (arg(c, 2) & 0x200u) != 0; // D3DUSAGE_DYNAMIC
     uint32_t view_ = com_view(vb, IF_D3DVERTEXBUFFER9);
     if (!view_) {
         com_release(vb);
@@ -1313,6 +1329,7 @@ void Dev_CreateIndexBuffer(X86 *c) {
     }
     ib->dev_d3d = dev->id;
     ib->buf_bytes = bytes;
+    ib->dynamic = (arg(c, 2) & 0x200u) != 0; // D3DUSAGE_DYNAMIC
     ib->rmask = arg(c, 3) == 102 ? 4 : 2; // D3DFMT_INDEX32 or D3DFMT_INDEX16
     uint32_t view_ = com_view(ib, IF_D3DINDEXBUFFER9);
     if (!view_) {
