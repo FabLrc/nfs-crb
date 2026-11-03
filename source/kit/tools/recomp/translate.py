@@ -6113,6 +6113,12 @@ void recomp_call(X86 *c, uint32_t target)
 }
 static void recomp_call_inner(X86 *c, uint32_t target)
 {
+    /* Shims first: they are most indirect calls (thousands of D3D and D3DX calls
+     * a frame), and their range holds no translated function nor module. */
+    if (target >= GUEST_SHIM_BASE && target < GUEST_SHIM_END) {
+        recomp_shim_call(c, target);
+        return;
+    }
     int32_t i = recomp_lookup(target);
     if (i >= 0) {
         if (recomp_profile_enabled) recomp_profile_push((uint32_t)i);
@@ -6128,10 +6134,6 @@ static void recomp_call_inner(X86 *c, uint32_t target)
         return;
     }
     if (recomp_module_call(c, target)) return;
-    if (target >= GUEST_SHIM_BASE && target < GUEST_SHIM_END) {
-        recomp_shim_call(c, target);
-        return;
-    }
     recomp_unknown_call(c, target);
 }
 
