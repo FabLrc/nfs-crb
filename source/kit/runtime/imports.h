@@ -175,6 +175,10 @@ extern const size_t g_misc_free_shim_count;
 
 // Per-import call counts, for the runtime tests and end-of-run diagnostics.
 void imports_dump_stats(FILE *out);
+// RECOMP_IMPORT_RATES=<seconds>: every that many seconds, the most-called imports since the
+// last report, per second and per presented frame, to stderr. The game thread calls this
+// once per present, holding the baton; nothing at all when unset.
+void imports_log_rates(void);
 // Per-DLL implemented / logging-only / unknown-argc breakdown of every
 // allocated trampoline, and the names in each of the latter two groups.
 void imports_dump_coverage(FILE *out);
