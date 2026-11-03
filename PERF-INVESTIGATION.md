@@ -20,6 +20,7 @@ Point de départ : conversation « pistes d'optimisation » (projets comparables
 | `RECOMP_AB_PERIOD=10` et `RECOMP_AB_SWITCHES=…` | A/B **dans la même partie** : toutes les 10 s, un interrupteur reprend l'ancien comportement. Le rapport du bench sépare les deux phases. `platform/ab_phase.h` liste les interrupteurs existants. |
 | `RECOMP_FREE_RUN=<hex>,<hex>` | Remplace sans recompiler la liste free run de `game.toml`. `0` la désactive. |
 | `RECOMP_AUDIO_STATS=1` | Toutes les 5 s, par buffer son : Ko/s écrits et lus, avance sur le curseur, écritures en retard, clics. |
+| `RECOMP_IMPORT_RATES=<s>` | Toutes les N s : appels d'imports Windows, D3D9 et D3DX par seconde et par frame, avec les 30 plus fréquents (dans `console.txt` du bench). |
 
 Noms des fonctions wasm : `build/web/recomp/CarbonRecomp.js.symbols`. Cette table est **propre à chaque build**, et une régénération (`--regenerate`) renumérote tout. Pour comparer deux builds, il faut garder les `.symbols` de chacune et les passer avec `--symbols`.
 
@@ -130,6 +131,70 @@ Méthode : profil de course, build `entry` (avant) contre `hooks` (après), 30 s
 
 Les fps de ces lancements (12 à 70) ne sont pas exploitables, à cause de la variance décrite plus haut. Les hooks s'installent sans échec (`customization: source stance controls … installed`). **Reste à vérifier à l'œil** : jantes et pneus personnalisés, carrossage modifié, en course.
 
+### 7. Volume d'appels d'imports et coût du dispatch
+
+Méthode : `bun tools/web_race_bench.mjs --env RECOMP_IMPORT_RATES=10 --no-profile`, course sur la grille, 40 s. Ce sont des **comptages**, insensibles à la vitesse des cœurs.
+
+Il y a **2,05 millions d'appels par seconde, soit 27 363 par frame**. Les plus fréquents, par frame :
+
+| Import | Appels |
+|---|---|
+| `SetRenderState` | 5 932 |
+| `ID3DXEffect::SetMatrix` | 3 168 |
+| `D3DXMatrixMultiply` | 2 871 |
+| `ID3DXEffect::SetVector` | 1 733 |
+| `ID3DXEffect::CommitChanges` | 1 659 |
+| `ID3DXEffect::SetTexture` | 1 463 |
+| `DrawIndexedPrimitive` et `SetStreamSource` | 1 433 chacun |
+| `D3DXVec4Transform` | 1 358 |
+| `SetSamplerState` | 1 319 |
+| `SetIndices` | 1 125 |
+| `D3DXMatrixTranspose` | 822 |
+| `D3DXVec3Transform` | 620 |
+| `SetVertexDeclaration` | 606 |
+
+Profil (`hooks-b`, thread de jeu) : les shims eux-mêmes coûtent peu (`Dev_DrawIndexedPrimitive` 5 % en cumulé, `Fx_CommitChanges` 2,6 %, `X_D3DXMatrixMultiply` 0,9 %…). C'est le **dispatch autour** qui pèse : `imports_dispatch_holding` 4,2 % en temps propre, `sched_checkpoint` 1,4 % et sa lecture d'horloge 0,7 %, soit environ 6–7 % du thread, environ 30 ns par appel.
+
+Pistes : rendre ce chemin plus léger (une seule lecture de la table, moins de lectures atomiques de gardes de statiques), et réduire le nombre d'appels (maths D3DX appelées directement plutôt que par l'import). Pas encore fait.
+
+Le return observer `dx_report_failure` est appelé après chaque import, mais il sort tout de suite (bit de signe) : 0,2 %.
+
+### 8. Expérience `restrict` sur le contexte : clôturée, sans gain mesurable
+
+Le code généré garde chaque registre x86 en mémoire (`c->r[n]`), et chaque écriture invitée passe par `memcpy(g_mem + a, …)`. Pour l'analyse d'alias, cette écriture peut modifier `c->r`, `c->eflags_*` et même le pointeur `g_mem`. Après chaque écriture, le compilateur doit donc tout recharger, et il garde toutes les écritures de flags.
+
+Deux contraintes de sûreté :
+- `restrict` sur la mémoire invitée **n'est pas sûr** : les fonctions appelées l'écrivent par leur propre pointeur, et LLVM pourrait garder des valeurs en registre au travers d'un appel.
+- `restrict` sur `c` est sûr si personne n'accède au contexte autrement que par `c` pendant un appel invité. C'est faux pour `mods/options_menu.cpp` et `mods/game_settings.cpp`, qui passent par `guest_current_context()` (sauvegarde puis restauration de `*c`) dans des hooks. En pratique, ces appels reçoivent `c`, donc le risque est faible, mais il faudrait les corriger avant d'activer `restrict`.
+
+Montage :
+- `translate.py` émet `X86 *RECOMP_RESTRICT c` dans les définitions `fn_` et `body_` ;
+- `x86.h` définit `RECOMP_RESTRICT` **vide par défaut**, sans aucun changement de code ;
+- la variante mesurée recompile `recomp_gen` avec `-DRECOMP_RESTRICT=__restrict`.
+
+La variante avec `restrict` est **1,16 Mo plus petite** (119,18 → 118,02 Mo de wasm, –1 %) : beaucoup de rechargements disparaissent bien.
+
+Mesure : `/tmp/nfsc-ab.sh` lance alternativement les deux builds, 45 s de course arrêtée sur la grille chacune. 9 exécutions sans `restrict` et 8 avec. Les 9 premières ont été faites avec App Nap actif, les 8 suivantes sans.
+
+| Build | fps par exécution | Médiane |
+|---|---|---|
+| sans `restrict` | 25,7 / 26,0 / 27,0 / 25,2 / 38,4 / 15,2 / 34,2 / 29,6 / 43,5 | **27,0** |
+| avec `restrict` | 39,2 / 22,4 / 28,3 / 26,9 / 29,5 / 26,8 / 26,6 / 34,6 | **27,6** |
+
+Aucune différence ne ressort d'un bruit de ±50 %. Vu le risque (cas `guest_current_context()`) et l'absence de gain prouvé, **retiré** : `translate.py`, `x86.h` et `Translate.cmake` sont revenus à l'état d'origine, et rien n'est commité.
+
+Leçon : **sur ce Mac, les fps du navigateur ne permettent pas de juger un changement global de génération de code inférieur à environ 10 %.** Pour travailler au niveau du traducteur (registres locaux, flags, x87), il faut d'abord un banc déterministe : le harnais natif du kit (`pop_smoke` avec horloge figée, `kit/tools/recomp/performance_run.py`) et un scénario Carbon, qui n'existe pas encore (`smoke/` absent).
+
+### 9. App Nap et fenêtre en arrière-plan
+
+Les fenêtres du bench passaient en arrière-plan pendant que tu lisais autre chose. macOS (App Nap, priorité des threads) ralentit alors Chrome, ce que ses propres drapeaux anti-throttling ne couvrent pas. App Nap est désactivé pour Chrome sur ce poste depuis la série nr-a…rs-d :
+
+```sh
+defaults write com.google.Chrome NSAppSleepDisabled -bool YES   # retour : defaults delete com.google.Chrome NSAppSleepDisabled
+```
+
+La variance reste aussi forte sans App Nap (15 à 43 fps sur la même build). Une cause encore non identifiée subsiste : priorité des threads d'une app en arrière-plan, température, ou scène (le nombre de draws varie de 1 740 à 1 990 avec la caméra d'attente). Pendant un bench, mieux vaut garder la fenêtre au premier plan.
+
 ## Pistes restantes
 
 Classées par ordre de rentabilité.
@@ -145,6 +210,8 @@ Classées par ordre de rentabilité.
 
 **B. Traduire ces routines à l'avance, reconnues par leur contenu**, gain estimé +6–8 %. Il faut normaliser les `call rel32` vers des cibles absolues, puis identifier les routines par hash.
 
-**Clôturées** : `-O2` sur `gpu_backend`, suppression de la limite de fps pour les joueurs, free run de `0089e2e3`.
+**Prérequis pour tout travail au niveau du traducteur** : un banc déterministe, voir la leçon du point 8.
 
-**Non traitées** (voir la conversation de départ) : `-msimd128`, registres en variables locales et `restrict` dans `translate.py`, analyse globale des flags, création asynchrone des pipelines.
+**Clôturées** : `-O2` sur `gpu_backend`, suppression de la limite de fps pour les joueurs, free run de `0089e2e3`, `restrict` sur le contexte (pas de gain mesurable, et risqué).
+
+**Non traitées** (voir la conversation de départ) : `-msimd128`, registres en variables locales dans `translate.py`, analyse globale des flags, création asynchrone des pipelines.
