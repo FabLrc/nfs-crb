@@ -6,7 +6,7 @@ Point de départ : la conversation « pistes d'optimisation » (https://claude.a
 
 ## Reprendre le travail (autre poste, nouvel agent)
 
-**Mise à jour du 3 novembre 2026, soir (PC Windows).** Le travail a repris sur un PC Windows : mise en place et pièges au point 10, trois optimisations mesurées aux points 11 à 13, bilan juste avant « Suite proposée ». Les commits qui modifient le jeu sont `cab614c`, `60ee9de` et `1e8442b`. Ils s'ajoutent aux 3 commits du Mac décrits ci-dessous.
+**Mise à jour du 3 novembre 2026, soir (PC Windows).** Le travail a repris sur un PC Windows : mise en place et pièges au point 10, optimisations mesurées aux points 11 à 14, bilan juste avant « Suite proposée ». Les commits qui modifient le jeu sont `cab614c`, `60ee9de`, `1e8442b`, `a95b215` et `5d3758c`. Ils s'ajoutent aux 3 commits du Mac décrits ci-dessous.
 
 **État au 3 novembre 2026 (Mac).** Branche `perf/measurement`, partie de `main` (`2c4c705`) ; `git log main..perf/measurement` liste les commits. Seuls 3 commits modifient le jeu :
 - `631e0f7` : deux routines audio sont maintenant traduites au lieu d'être interprétées ;
@@ -350,9 +350,30 @@ Méthode : `web_race_ab.sh 45`, `step1b` contre `pool`, 3 exécutions chacune, a
 
 Gain d'environ **1,6 point**. Vérification visuelle : les captures de fin de course (`race.png`) sont identiques à celles de la référence pour un même angle de la caméra d'attente. Cette caméra tourne, et la Camaro paraît rouge ou presque noire selon l'angle, avec la référence comme avec ce changement. **À vérifier à l'œil en jouant**, surtout les effets plein écran (HDR, flou de vitesse, `VISUALTREATMENT`) et l'interface.
 
+### 14. Recherche des objets COM et staging des tampons dynamiques
+
+Deux changements mesurés ensemble. Ils touchent des fonctions distinctes, que le profil sépare.
+
+**`com_this` mémorise les pointeurs d'interface** (commit `a95b215`, `dx/com.cpp`). Chaque appel COM (environ 25 000 par frame) relisait trois mots de la vue en mémoire invitée, puis la table des objets : des lectures dépendantes, souvent hors cache. Une table de 1 024 entrées par thread garde les derniers pointeurs vus, indexée par adresse. Elle est vidée à toute mort d'objet (`g_com_deaths`, incrémenté dans `com_destroy` et `com_reset`), seul moment où une vue est libérée. Une première version à 64 entrées gagnait moins : les arguments (textures de `Fx_SetTexture`, tampons de `SetStreamSource` et `SetIndices`) sont des centaines d'objets par frame.
+
+**Les tampons `D3DUSAGE_DYNAMIC` gardent leur copie invitée entre deux `Lock`** (commit `5d3758c`, `dx/d3d9.cpp`). Le tas invité est un « first fit » qui parcourt tous les blocs libres : placer quelques dizaines de Ko prenait environ 40 µs, à chaque verrouillage. Les tampons statiques, verrouillés une fois au chargement, rendent toujours leur bloc.
+
+Méthode : `web_race_ab.sh 45`, `pool` contre `combig` (les deux changements), 3 exécutions chacune, alternées.
+
+| | `pool` | `combig` |
+|---|---|---|
+| `heap_alloc` | 0,75–0,80 % | **0,03–0,04 %** |
+| `com_this*` + `this_fx` + `Dev_*` + `Fx_*` | 4,89–5,20 % | **4,59–4,79 %** |
+| Total des fonctions suivies | 6,18–6,42 % | **5,12–5,38 %** |
+| fps | 69,4 / 71,1 / 68,9 | 71,8 / 71,0 / 73,0 |
+
+Gain d'environ **1,1 point**. Captures de course identiques à la référence pour un même angle.
+
+`bind_constants_impl` (1,5 %) : déjà incrémental, environ 4 ns par entrée de table de constantes, et les samplers sont reliés à chaque passe par choix. Pas de gain simple vu.
+
 ### Bilan au 3 novembre 2026 (PC)
 
-Depuis `base`, sur le thread de jeu : dispatch –1,8 point (points 11 et 12), effets –1,6 point (point 13), soit environ **–3,4 points** de temps CPU. En fps, rien ne ressort encore de la variance entre exécutions (environ ±5 fps).
+Depuis `base`, sur le thread de jeu : dispatch –1,8 point (points 11 et 12), effets –1,6 point (point 13), COM et staging –1,1 point (point 14), soit environ **–4,5 points** de temps CPU. En fps, la tendance est favorable mais reste dans la variance entre exécutions (environ ±5 fps) : `base` 61,8–69,7, `combig` 71,0–73,0 (exécutions de séries différentes, donc à prendre avec précaution).
 
 ## Suite proposée
 
