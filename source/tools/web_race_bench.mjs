@@ -263,7 +263,7 @@ const sym = new Map();
 if (existsSync(opt.symbols))
   for (const line of readFileSync(opt.symbols, "utf8").split("\n")) {
     const i = line.indexOf(":");
-    if (i > 0) sym.set(+line.slice(0, i), line.slice(i + 1));
+    if (i > 0) sym.set(+line.slice(0, i), line.slice(i + 1).trim()); // CRLF on Windows
   }
 const nm = (f) => { const m = /^wasm-function\[(\d+)\]$/.exec(f); return m ? sym.get(+m[1]) || f : f || "(anon)"; };
 const q = (a, p) => { const s = [...a].sort((x, y) => x - y); return s[Math.min(s.length - 1, Math.floor(p * s.length))]; };
