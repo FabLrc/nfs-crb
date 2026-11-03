@@ -4,6 +4,9 @@ Game features, performance improvements, and bug fixes for NFS Carbon in the bro
 
 ## Unreleased
 
+- Keep shared effect values in their effect pool, as Direct3D does, instead of copying each per-object matrix into every other effect, cutting about 1.6% of the game thread's CPU time in races.
+- Reduce the cost of every Direct3D and Windows call from the game: shims are found before the function lookup, the scheduler's call counter is no longer atomic, and the clock is read less often in the browser.
+
 - Filter the stance camber and third-wheel customization callbacks at their call sites, removing CPU state copies from every other float conversion and model draw in races.
 - Translate two audio routines that ran in the interpreter while the sound thread blocked the game thread.
 

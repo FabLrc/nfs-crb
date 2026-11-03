@@ -6,7 +6,9 @@ Point de départ : la conversation « pistes d'optimisation » (https://claude.a
 
 ## Reprendre le travail (autre poste, nouvel agent)
 
-**État au 3 novembre 2026.** Branche `perf/measurement`, partie de `main` (`2c4c705`) ; `git log main..perf/measurement` liste les commits. Seuls 3 commits modifient le jeu :
+**Mise à jour du 3 novembre 2026, soir (PC Windows).** Le travail a repris sur un PC Windows : mise en place et pièges au point 10, trois optimisations mesurées aux points 11 à 13, bilan juste avant « Suite proposée ». Les commits qui modifient le jeu sont `cab614c`, `60ee9de` et `1e8442b`. Ils s'ajoutent aux 3 commits du Mac décrits ci-dessous.
+
+**État au 3 novembre 2026 (Mac).** Branche `perf/measurement`, partie de `main` (`2c4c705`) ; `git log main..perf/measurement` liste les commits. Seuls 3 commits modifient le jeu :
 - `631e0f7` : deux routines audio sont maintenant traduites au lieu d'être interprétées ;
 - `0e368f0` : deux hooks de customisation sont filtrés par site d'appel ;
 - `f451be2` : entrées correspondantes dans le changelog.
@@ -60,6 +62,14 @@ print("patched")
 - `web_race_ab.sh` est un script `sh` : il faut le lancer depuis Git Bash.
 - La variance mesurée ici vient du Mac (cœurs performance et efficacité, App Nap). Il faut la **remesurer sur le PC** : 3 ou 4 exécutions de la même build, en comparant les fps et la part de free run audio. Les processeurs Intel récents (12e génération et plus) ont aussi des cœurs efficacité. Le mode d'alimentation « Performances optimales » et la fenêtre au premier plan limitent le problème.
 - Les noms des fonctions wasm viennent de `build/web/recomp/CarbonRecomp.js.symbols`, propre à chaque build. Il faut le garder avec chaque build qu'on compare.
+
+## Environnement de mesure (PC Windows, depuis le point 10)
+
+- Intel Core i7-12700KF (8 cœurs performance, 4 efficacité, 20 threads), RTX 3080, 32 Go, Windows 11.
+- **Edge** (Chromium) et non Chrome, absent du poste : `--chrome "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"`.
+- Node 26 au lieu de Bun. Emscripten 6.0.13 dans `%USERPROFILE%\emsdk`, Ghidra 12.1.3 et JDK 26.0.1 (Windows x64) dans `%USERPROFILE%\nfsc-tools`, fichiers du jeu dans `%USERPROFILE%\nfsc-game`.
+- Builds sauvegardées pour les A/B dans `%USERPROFILE%\nfsc-builds\<nom>` (`base` = `perf/measurement` au commit `4534659`).
+- Course sur la grille à **62–70 fps** pour la même build (Mac : 15–70). La variance existe encore, mais elle est bien plus faible.
 
 ## Environnement de mesure (Mac d'origine)
 
@@ -252,16 +262,112 @@ defaults write com.google.Chrome NSAppSleepDisabled -bool YES   # retour : defau
 
 La variance reste aussi forte sans App Nap (15 à 43 fps sur la même build). Une cause encore non identifiée subsiste : priorité des threads d'une app en arrière-plan, température, ou scène (le nombre de draws varie de 1 740 à 1 990 avec la caméra d'attente). Pendant un bench, mieux vaut garder la fenêtre au premier plan.
 
+### 10. Passage sur le PC Windows (3 novembre 2026)
+
+Mise en place, dans l'ordre de « Build web et serveur local » :
+- `setup.py --link-only` échoue : créer un lien symbolique demande un privilège sous Windows. Une **jonction** fait l'affaire : `cmd /c mklink /J source\original %USERPROFILE%\nfsc-game`.
+- `tools/fetch_tools.py` est écrit pour macOS. Ghidra se télécharge tel quel (son décompilateur Windows est fourni), avec le JDK `openjdk-26.0.1_windows-x64_bin.zip` du même dossier de téléchargement. `analyze.py` passe en environ 10 min.
+- La build se lance depuis PowerShell après `emsdk_env.ps1` (Git Bash ne trouve pas `emcc`). `--regenerate` : 8 à 9 min ; sans : environ 1 min. Le wasm fait 119 180 318 octets, comme sur le Mac.
+- Le serveur local et le patch du site sont maintenant versionnés : `source/tools/dev/nfsc_serve.py` et `source/tools/dev/patch_site.py`. Le `games.json` de la release est gardé hors du dépôt (`%USERPROFILE%\nfsc-tools\g.json`).
+- Avant le premier bench, le profil du navigateur doit avoir une **sauvegarde** : un profil vierge demande de créer un alias et d'activer l'autosave, ce que le bench ne sait pas faire. Je l'ai fait une fois à la main par DevTools (`--keep-open`, puis Entrée sur chaque écran).
+
+Pièges du bench sous Windows, corrigés dans `web_race_bench.mjs` (commits `d5bef85`, `929ba50`) :
+- **Tuer `msedge.exe` ne ferme pas Edge.** Les onglets de jeu des exécutions précédentes continuaient de tourner (jusqu'à 6 jeux en même temps), et le bench pouvait se brancher sur un ancien onglet, en arrière-plan, à 1 fps. Le bench ferme maintenant le navigateur par DevTools (`Browser.close`), avant et après chaque exécution. Le commit `d5bef85` attribuait à tort ce 1 fps à l'occlusion de la fenêtre ; le drapeau `CalculateNativeWinOcclusion` est resté par précaution.
+- Le PC arrive à l'écran-titre plus vite que le Mac : le clic partait trop tôt et l'écran-titre a autant de draws que le dialogue EA Nation. Le bench attend 3 s, et reclique avant chaque Entrée de ce dialogue.
+- Émulation du focus (`Emulation.setFocusEmulationEnabled`), pour que le jeu reçoive les entrées même si Windows refuse le premier plan à la fenêtre.
+- **Attention aux tâches de fond** : une série `web_race_ab.sh` arrêtée depuis l'outil a continué de tourner, et deux benchs se sont superposés. Tous ces résultats ont été écartés (`build/bench-invalid/`). Vérifier qu'aucun `node`/`sh` de bench ne tourne avant une série.
+
+Outil ajouté : `source/tools/bench_shares.mjs` donne, pour plusieurs exécutions, la part en temps propre de fonctions choisies sur le thread de jeu (par défaut celles du dispatch) :
+
+```sh
+node tools/bench_shares.mjs build/bench/<run A>=<symbols de A> build/bench/<run B>=<symbols de B> [--fn <regex> ...]
+```
+
+### 11. Étape 1 : dispatch des imports allégé
+
+Commit `cab614c`. Trois changements :
+- **`recomp_call` teste d'abord la plage des shims** (`translate.py`, il faut `--regenerate`). Chaque appel d'import passait avant par une recherche ratée dans la table des fonctions, puis par le parcours des modules (`recomp_module_call`), avant d'arriver au shim. Cette plage ne contient ni fonction traduite ni module.
+- **Compteur de `sched_checkpoint` non atomique.** En wasm, toute opération atomique est séquentiellement cohérente, quel que soit l'ordre demandé. Une écriture devient un XCHG sur x86, une barrière complète, à chacun des 2 millions d'appels par seconde. Tous les appelants tiennent le baton (`imports_dispatch` le reprend au free run d'abord), et la passation du baton ordonne les accès.
+- `imports_dispatch_holding` ne lit la table des trampolines qu'une fois (la table est volontairement fuitée, donc le vecteur ne bouge jamais ; seuls ses éléments bougent).
+
+Méthode : `web_race_ab.sh 45` alterné, `base` contre `step1`, course arrêtée sur la grille, Edge. Parts en temps propre du thread de jeu (`bench_shares.mjs`) :
+
+| | `base` (5 exécutions) | `step1` (4 exécutions) |
+|---|---|---|
+| `sched_checkpoint` | 1,21–1,47 % | **0,36–0,42 %** |
+| `recomp_call` | 2,57–2,79 % | 2,32–2,56 % |
+| `recomp_module_call` | 0,50–0,59 % | 0,31–0,39 % |
+| `imports_dispatch_holding` | 2,77–3,02 % | 2,93–3,18 % |
+| `_emscripten_get_now` | 1,28–1,48 % | 1,26–1,59 % |
+| **Total du dispatch** | **8,45–9,17 %** | **7,42–7,98 %** |
+| fps | 61,8 / 64,1 / 68,0 / 69,7 / 66,5 | 69,4 / 65,1 / 61,8 / 65,7 |
+
+Gain d'environ **1,2 point** du thread de jeu, sans recouvrement entre les séries. En fps, l'effet est noyé dans la variance. `imports_dispatch_holding` monte un peu, probablement parce que le compilateur y intègre maintenant une partie du travail qui était ailleurs.
+
+Les tests `tools/recomp/tests/test_translate_{imports,hooks,driver}.py` donnent 13 échecs sous Windows, **identiques avant et après** ce changement (environnement).
+
+### 12. Lecture d'horloge de `sched_checkpoint` (étape 1b)
+
+Le profil de `base` montre que `_emscripten_get_now` (1,3–1,5 %) vient presque entièrement de `sched_checkpoint` (1,19 % sur 1,34 %), alors que l'horloge n'y est lue qu'un appel sur 64 : environ 31 000 lectures par seconde, soit environ 0,4 µs par `performance.now()` sous Edge/Windows, passage wasm→JS compris.
+
+Changement, commit `60ee9de` : dans le navigateur, une lecture sur 256 appels. Pour ne pas retarder le thread audio, la demande de baton (`g_baton_wanted`, simple lecture, gratuite sur x86 et ARM) est testée à **chaque** appel, avant le pas. Un thread qui revient du free run récupère donc le baton plus vite qu'avant, et seule la tranche de 1 ms bouge, d'au plus environ 150 µs.
+
+Méthode : `web_race_ab.sh 45`, `step1` contre `step1b`, 3 exécutions chacune, alternées.
+
+| | `step1` | `step1b` |
+|---|---|---|
+| `_emscripten_get_now` | 1,32–1,49 % | **0,76–0,88 %** |
+| Total du dispatch | 7,39–7,96 % | **6,89–7,11 %** |
+| Attente du baton (thread de jeu) | 8,7–9,5 % | 8,9–9,6 % |
+| fps | 62,4 / 71,1 / 71,5 | 63,2 / 65,7 / 69,3 |
+
+Gain d'environ 0,6 point, sans effet visible sur l'attente du baton. Le reste de `_emscripten_get_now` vient surtout de `QueryPerformanceCounter` (`boot_time_source`) et de `clock_gettime`.
+
+Note : les rapports de ces exécutions affichent un thread audio occupé à 100 % et un free run à 0 %. C'est faux : les noms du `.js.symbols` de la build Windows finissent par `\r` (CRLF), et le rapport ne les reconnaissait plus. Corrigé dans le bench (commit `bebc1a7`). `bench_shares.mjs`, lui, n'était pas touché.
+
+### 13. Paramètres partagés des effets : valeur gardée dans le pool
+
+Profil après 1b : `share_parameter` à 2,2–2,5 % du thread de jeu, le plus gros poste côté hôte après le dispatch. Une mesure temporaire (non commitée) a montré que :
+- les **29 effets** du jeu sont dans **un seul pool**, avec 15 à 29 paramètres partagés chacun ;
+- les écritures partagées sont les matrices et vecteurs **par objet** : `WorldViewProj` (3,1 M sur la partie mesurée), `cvLocalEyePos` (2,4 M), `cmWorldView` (2,4 M), `cmWorldMat` (1,9 M), `cmWorldMatTranspose` (1,8 M), `cvLocalLightVec` (0,7 M)… ;
+- chaque écriture était recopiée tout de suite dans 11,7 autres effets en moyenne, qui ne s'en servaient pas avant l'écriture suivante.
+
+Changement, commit `1e8442b` (`dx/d3dx9.cpp`) : la valeur partagée va dans un **slot du pool** (`PoolSlot`, une copie), comme dans D3DX. Un effet ne met sa propre copie à jour que lorsqu'il la lit :
+- un getter ou un setter de ce paramètre (macro `FX_PARAM_OR_FAIL`, et `shared_setter` avant d'appeler le setter, qui compare la nouvelle valeur à l'actuelle) ;
+- une passe appliquée (`apply_pass`, donc `BeginPass` et `CommitChanges`), avec un test rapide quand aucune écriture partagée n'a eu lieu depuis la dernière mise à jour (`g_pool_writes`).
+
+Chaque copie garde sa référence de texture, et le slot en garde une aussi. Une différence de comportement : un effet créé après la destruction de tous les autres effets du pool reprend la dernière valeur du pool, au lieu de garder sa valeur par défaut. C'est ce que fait D3DX, dont le pool est un objet à part.
+
+Méthode : `web_race_ab.sh 45`, `step1b` contre `pool`, 3 exécutions chacune, alternées.
+
+| | `step1b` | `pool` |
+|---|---|---|
+| `share_parameter` | 2,22–2,45 % | 0 |
+| `shared_setter<Fx_SetMatrix>` et autres | 0,41–0,44 % | 0,58–0,71 % |
+| `apply_pass` (contient maintenant `pull_pool`) | 0,60–0,75 % | 0,96–1,05 % |
+| **Fonctions d'effet au total** (setters, `apply_pass`, `bind_constants_impl`, `this_fx`, `Fx_*`) | **5,92–6,26 %** | **4,33–4,57 %** |
+| fps | 64,8 / 68,0 / 72,4 | 67,5 / 70,4 / 70,0 |
+
+Gain d'environ **1,6 point**. Vérification visuelle : les captures de fin de course (`race.png`) sont identiques à celles de la référence pour un même angle de la caméra d'attente. Cette caméra tourne, et la Camaro paraît rouge ou presque noire selon l'angle, avec la référence comme avec ce changement. **À vérifier à l'œil en jouant**, surtout les effets plein écran (HDR, flou de vitesse, `VISUALTREATMENT`) et l'interface.
+
+### Bilan au 3 novembre 2026 (PC)
+
+Depuis `base`, sur le thread de jeu : dispatch –1,8 point (points 11 et 12), effets –1,6 point (point 13), soit environ **–3,4 points** de temps CPU. En fps, rien ne ressort encore de la variance entre exécutions (environ ±5 fps).
+
+## Suite proposée
+
 ## Suite proposée
 
 Dans cet ordre. Chaque étape doit se mesurer avec une méthode **insensible à la vitesse des cœurs** : part des fonctions dans le profil (le rapport du bench donne self et inclusif), comptages (`RECOMP_IMPORT_RATES`), ou A/B dans la même partie (`RECOMP_AB_PERIOD`). Il faut noter dans ce journal les mesures avant et après, la commande utilisée et la build comparée.
 
 ### Étape 0 : sur le nouveau poste
 
-- Build de `perf/measurement`, puis 3 ou 4 benchs de la même build pour connaître la variance du poste.
-- Vérification visuelle des roues personnalisées (point 2 de « Reprendre le travail »).
+- ~~Build de `perf/measurement`, puis 3 ou 4 benchs de la même build pour connaître la variance du poste.~~ Fait, point 10 : 62–70 fps.
+- Vérification visuelle des roues personnalisées (point 2 de « Reprendre le travail ») : **toujours pas faite**.
 
 ### Étape 1 : alléger le dispatch des imports
+
+**Fait en partie** (points 11 et 12) : –1,2 point. Reste : `imports_dispatch_holding` (environ 3 %) et `recomp_call` (environ 2,4 %, surtout des appels virtuels du jeu, pas des imports).
 
 Gain attendu : 2 à 4 % du thread de jeu.
 
@@ -301,9 +407,11 @@ Gain attendu : environ +3 à +8 % de fps, d'après la sensibilité mesurée au p
 
 ### Autres pistes, par coût sur le thread de jeu
 
-- Effets D3DX/FX (6,9 %) : `share_parameter`, `bind_constants_impl`, `apply_state`, `shared_setter<Fx_SetMatrix>`, `Fx_CommitChanges`. Il y a 3 168 `SetMatrix` et 1 659 `CommitChanges` par frame.
+- Effets D3DX/FX (6,9 %) : `share_parameter` est traité (point 13). Restent `bind_constants_impl` (1,5 %), `this_fx` (0,9 %), `apply_state`, `apply_pass`. Il y a 3 168 `SetMatrix` et 1 659 `CommitChanges` par frame.
+- Interpréteur du thread audio : environ 2,4 % du temps de ce thread, dont la recherche de la routine ne représente qu'une petite partie (environ 1 500 appels par seconde). C'est **l'exécution interprétée** qui coûte : la piste B (traduire ces routines à l'avance) est la seule qui rapporterait vraiment.
 - D3D9 (6 %) : `gpu_draw`, `queue_draw`, `gpu_sync`. Il y a 5 932 `SetRenderState` par frame : vérifier que les états redondants sont filtrés le plus tôt possible.
 - Maths D3DX passées par l'import (`D3DXMatrixMultiply` 2 871 par frame, `D3DXVec4Transform` 1 358, `D3DXMatrixTranspose` 822) : les appeler directement, sans dispatch d'import, enlèverait environ 5 000 appels par frame.
+- `com_this` (1,4 % en temps propre sur le PC, dont 1,0 % depuis `Fx_SetTexture`, 1 463 appels par frame) : le code est court, le coût vient des défauts de cache (vue COM en mémoire invitée, puis `ComObj` sur le tas hôte). Un cache adresse → objet demanderait de l'invalider à la libération des vues. `Fx_SetTexture` pourrait au moins sauter `addref`/`release` quand la texture ne change pas.
 - `fe_render_hook` (3,8 % en cumulé) : hook REPLACE sur chaque objet d'interface dessiné (`005b0920`, `source/mods/core/nfsc/fe_pad.h`).
 - Non traités (voir la conversation de départ) : `-msimd128`, création asynchrone des pipelines WebGPU (saccades à la première apparition d'un effet).
 
