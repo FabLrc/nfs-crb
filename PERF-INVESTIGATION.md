@@ -15,6 +15,7 @@ Point de départ : conversation « pistes d'optimisation » (projets comparables
 | Outil | Rôle |
 |---|---|
 | `source/tools/web_race_bench.mjs` | Lance Chrome sur la build locale. Traverse les menus jusqu'à la première Quick Race (circuit Main Street, Camaro, voiture arrêtée sur la grille), mesure N s, ferme Chrome. Écrit dans `build/bench/<date>-<label>/` : `frames.json`, `profile.json` (profils CPU de la page et des 24 workers), `console.txt`, captures, `report.txt`. Usage : `cd source && bun tools/web_race_bench.mjs --label X --seconds 45 [--env RECOMP_…=…] [--symbols fichier.symbols] [--throttle]`. |
+| `source/tools/web_race_ab.sh` | Benchs alternés de builds sauvegardées : `tools/web_race_ab.sh 45 /chemin/buildA:a1 /chemin/buildB:b1 … [-- options du bench]`. Chaque dossier contient `CarbonRecomp.{wasm,js,data,js.symbols}`, copiés juste après la build. Chrome est lancé sans `--enable-unsafe-webgpu` : WebGPU est actif par défaut, et ce drapeau ajoute une barre d'avertissement qui réduit la page. |
 | `RECOMP_FRAME_LIMIT=<fps>` (URL) | Remplace le réglage « Frame limit ». `120` laisse de la marge au-dessus de 60. `1000` supprime toute limite, utile **uniquement pour mesurer**. |
 | `RECOMP_D3D9_STATS=1` (URL) | Une ligne par frame dans `globalThis.__d3d9Frames` : `[t ms, pump ms (encodage WebGPU, thread principal), attente du thread jeu, defer, draws, phase A/B]`. |
 | `RECOMP_AB_PERIOD=10` et `RECOMP_AB_SWITCHES=…` | A/B **dans la même partie** : toutes les 10 s, un interrupteur reprend l'ancien comportement. Le rapport du bench sépare les deux phases. `platform/ab_phase.h` liste les interrupteurs existants. |
@@ -174,7 +175,7 @@ Montage :
 
 La variante avec `restrict` est **1,16 Mo plus petite** (119,18 → 118,02 Mo de wasm, –1 %) : beaucoup de rechargements disparaissent bien.
 
-Mesure : `/tmp/nfsc-ab.sh` lance alternativement les deux builds, 45 s de course arrêtée sur la grille chacune. 9 exécutions sans `restrict` et 8 avec. Les 9 premières ont été faites avec App Nap actif, les 8 suivantes sans.
+Mesure : `source/tools/web_race_ab.sh` lance alternativement les deux builds, 45 s de course arrêtée sur la grille chacune. 9 exécutions sans `restrict` et 8 avec. Les 9 premières ont été faites avec App Nap actif, les 8 suivantes sans.
 
 | Build | fps par exécution | Médiane |
 |---|---|---|
