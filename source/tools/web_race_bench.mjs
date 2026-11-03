@@ -77,7 +77,10 @@ const chrome = spawn(opt.chrome, [
   "--autoplay-policy=no-user-gesture-required", "--no-first-run", "--no-default-browser-check",
   // A covered or unfocused window must not be throttled while it is measured.
   "--disable-background-timer-throttling", "--disable-renderer-backgrounding",
-  "--disable-backgrounding-occluded-windows", "--window-size=1240,900", "about:blank",
+  "--disable-backgrounding-occluded-windows", "--window-size=1240,900",
+  // Windows: a covered window stops presenting (about 1 fps) despite the flags above.
+  ...(process.platform === "win32" ? ["--disable-features=CalculateNativeWinOcclusion"] : []),
+  "about:blank",
 ], { stdio: "ignore" });
 // The next run reuses the profile and the port: wait until this Chrome has really gone.
 const exited = new Promise((r) => chrome.once("exit", r));
