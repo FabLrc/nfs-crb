@@ -3,8 +3,10 @@
 #include "mods_internal.h"
 #include "game_config.h"
 #include "../dx/host_api.h"
+#include "../platform/os.h"
 #include <atomic>
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <regex>
 #include <sstream>
@@ -237,8 +239,15 @@ extern "C" void mods_display_scene_domain(int w, int h) {
 extern "C" int mods_display_scene_width(int w, int h) {
     return !classic.load() && wide.load() && scene_h == h ? std::max(w, scene_w) : w;
 }
+// RECOMP_FRAME_LIMIT=<fps> (TEST ONLY): replaces the Frame limit setting for frame-rate measurements.
+// A rate other than 40, 60 or 120 has no deadline (runtime/frame_deadline.h) and still retires the
+// game's own 60 Hz wait (kernel32.cpp native_frame_clock), so a large one (1000) runs uncapped.
 extern "C" int mods_display_fps() {
-    return fps.load();
+    static const int test_limit = [] {
+        const char *e = recomp_env("FRAME_LIMIT");
+        return e && *e ? std::max(0, atoi(e)) : -1;
+    }();
+    return test_limit >= 0 ? test_limit : fps.load();
 }
 extern "C" void mods_display_texture_pack(uint32_t replacements, int terrain_detail) {
     pack_contents = replacements ? 1 : terrain_detail ? 2 : 0;
