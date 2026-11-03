@@ -4,6 +4,9 @@ Game features, performance improvements, and bug fixes for NFS Carbon in the bro
 
 ## Unreleased
 
+- Filter the stance camber and third-wheel customization callbacks at their call sites, removing CPU state copies from every other float conversion and model draw in races.
+- Translate two audio routines that ran in the interpreter while the sound thread blocked the game thread.
+
 - Reduce CPU overhead before interpreted audio callbacks by replacing repeated diagnostic byte formatting, preserving callback execution and sound.
 
 - Reduce browser CPU overhead when binding shader resources by using the typed-array WebGPU call, retaining the Firefox memory workaround.
