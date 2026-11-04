@@ -6,6 +6,8 @@ Point de départ : la conversation « pistes d'optimisation » (https://claude.a
 
 ## Reprendre le travail (autre poste, nouvel agent)
 
+**Mise à jour du 4 novembre 2026.** La branche est rebasée sur la version de l'auteur `f9014fc` : ce qu'il avait déjà fait, ce qui reste à nous, et un blocage au démarrage trouvé et corrigé au point 15. L'ancienne branche reste sous `perf/measurement-pre-rebase`.
+
 **Mise à jour du 3 novembre 2026, soir (PC Windows).** Le travail a repris sur un PC Windows : mise en place et pièges au point 10, optimisations mesurées aux points 11 à 14, bilan juste avant « Suite proposée ». Les commits qui modifient le jeu sont `cab614c`, `60ee9de`, `1e8442b`, `a95b215` et `5d3758c`. Ils s'ajoutent aux 3 commits du Mac décrits ci-dessous.
 
 **État au 3 novembre 2026 (Mac).** Branche `perf/measurement`, partie de `main` (`2c4c705`) ; `git log main..perf/measurement` liste les commits. Seuls 3 commits modifient le jeu :
@@ -375,7 +377,54 @@ Gain d'environ **1,1 point**. Captures de course identiques à la référence po
 
 Depuis `base`, sur le thread de jeu : dispatch –1,8 point (points 11 et 12), effets –1,6 point (point 13), COM et staging –1,1 point (point 14), soit environ **–4,5 points** de temps CPU. En fps, la tendance est favorable mais reste dans la variance entre exécutions (environ ±5 fps) : `base` 61,8–69,7, `combig` 71,0–73,0 (exécutions de séries différentes, donc à prendre avec précaution).
 
-## Suite proposée
+### 15. Rebase sur la version de l'auteur `f9014fc` (4 novembre 2026)
+
+L'auteur a poussé `f9014fc` (« world-map racing, drift, online fixes and performance updates »). Ce qu'il contient, du point de vue des performances :
+- **registres x86 en variables locales** dans le code traduit (`register_locals = "regs-only"`, `kit/tools/recomp/regloc.py`) : environ 10 % de temps en moins sur le thread de jeu d'après son commentaire. C'est le chantier n°1 de l'« Étape 3 » plus bas ;
+- **tout le thread son en free run** (`free_run` ajoute `0x008daf40`), avec des imports sans baton (`imports_register_baton_free` : sections critiques, horloges, `Sleep`, TLS, `Interlocked`, et `GetCurrentPosition`/`Lock`/`Unlock` de DirectSound), un mode `RECOMP_SCHED=parallel`, des chemins rapides dans l'interpréteur pour les routines audio sur le tas ;
+- versions natives du test de frustum et de `_ftol2` (`native/cull.cpp`, `native/ftol.cpp`).
+
+**Ce qu'il avait déjà de nos changements, et qui a été retiré de la branche :**
+- `recomp_call` teste d'abord la plage des shims : fait à l'identique (partie de `cab614c`) ;
+- staging des vertex/index buffers : fait autrement, par un cache commun de 4 blocs et 512 Ko au plus (`buffer_stage_alloc` dans `dx/d3d9.cpp`). Notre commit `5d3758c` n'est pas repris ;
+- hooks de customisation filtrés par site d'appel : présents (commit Mac `0e368f0`, non repris).
+
+**Ce qui reste propre à la branche :** compteur non atomique et lecture unique de la table dans le dispatch, horloge lue 1 appel sur 256 avec la demande de baton vue à chaque appel, valeurs partagées gardées dans le pool D3DX, cache des pointeurs COM, deux routines audio dans `entry_points`, outils de mesure. L'ancienne branche est conservée sous `perf/measurement-pre-rebase`.
+
+Points vérifiés pour la nouvelle version :
+- le compteur non atomique suppose que seul le détenteur du baton appelle `sched_checkpoint`. C'est toujours vrai : en free run comme en mode `parallel`, un thread reprend le baton avant un import (`sched_free_run_leave`) ;
+- le cache COM n'est lu que sous le baton : les versions sans baton de DirectSound retrouvent leur tampon dans `g_ds_known`, pas par `com_this`.
+
+Outils adaptés (commit `de79167`) :
+- la nouvelle version affiche des panneaux dans la ville. Leurs images (`/nfsc/billboard-assets/`) ne sont pas dans Git : sans elles, `TRACKS/STREAML5RB.BUN` échoue (« City artwork unavailable »). `nfsc_serve.py` les relaie depuis la release publiée (`NFSC_RELEASE`, par défaut `20261104-worldmap-drift-63ebb89f`) ;
+- les écrans de démarrage sont trop proches en draws (titre ~700, Load complete ~526, dialogue EA Nation ~595, menu ~534) : le bench suit maintenant leur séquence ;
+- la build de l'auteur n'a pas `RECOMP_FRAME_LIMIT` et reste plafonnée à 60 : les deux builds sont comparées avec `--fps-cap 60`.
+
+Méthode : `web_race_ab.sh 45 … -- --fps-cap 60`, `upbase` (`f9014fc`) contre `upperf` (branche rebasée), alternés.
+
+| Parts du thread de jeu | `upbase` (3 exécutions) | `upperf` (2 exécutions) |
+|---|---|---|
+| Dispatch (`imports_dispatch*`, `recomp_call`, `sched_checkpoint`, horloge…) | 7,86–8,44 % | **6,35–6,48 %** |
+| Effets et COM (`share_parameter`, setters, `apply_pass`, `com_this`, `this_fx`, `Dev_*`, `Fx_*`) | 6,54–7,51 % | **5,08–5,25 %** |
+| Thread de jeu occupé, à 60 fps | 73,9–80,9 % | 71,6–73,7 % |
+| fps (plafond 60) | 57,9 / 57,9 / 58,0 | 58,7 / 58,8 |
+
+Gain d'environ **3,3 points**, comme avant le rebase. L'attente du baton par le thread de jeu tombe à environ 1,6 % avec la version de l'auteur (contre ~9 % avant) : c'est l'effet du thread son en free run.
+
+**Blocage au démarrage, trouvé et corrigé.** Une exécution `upperf` sur 3 ne s'est jamais affichée : le log s'arrête juste après la création du thread son (thread 7), sans le diagnostic « every guest thread is blocked » que les deux builds affichent normalement à cet endroit (un blocage transitoire qui se résout).
+
+Méthode : démarrages répétés jusqu'à 300 images présentées, 90 s au plus (script de démarrage seul, sans la course).
+
+| Build | Démarrages bloqués |
+|---|---|
+| `upbase` (`f9014fc`) | 0 sur 13 |
+| `upperf` (branche rebasée) | **2 sur 12** |
+| `upperf` sans l'étape 1b (`noB`) | 0 sur 18 |
+| `upperf` avec l'étape 1b corrigée (`stride`) | 0 sur 24 |
+
+Cause : l'étape 1b (point 12) testait la demande de baton (`g_baton_wanted`) **à chaque appel d'import**, avant le pas de 256. Avec le thread son entièrement en free run chez l'auteur, le thread principal cédait alors le baton à chaque appel tant qu'un thread l'attendait, et un démarrage sur six ne repartait plus. Le mécanisme exact n'est pas identifié. Correction (commit `5a145e0`) : le test revient derrière le pas, comme chez l'auteur ; seule la lecture d'horloge espacée (1 appel sur 256) est gardée. Un thread qui revient du free run attend donc le baton jusqu'à environ 150 µs, au lieu d'environ 40 µs dans `f9014fc`.
+
+Mesure de la version corrigée (`stride`, 2 exécutions, mêmes conditions) : dispatch **6,33–6,39 %** (`upbase` : 7,86–8,44 %), effets et COM **5,04–5,37 %** (`upbase` : 6,54–7,51 %), fps 58,3 / 58,2 au plafond de 60. Le gain reste d'environ **3,3 points** du thread de jeu.
 
 ## Suite proposée
 
