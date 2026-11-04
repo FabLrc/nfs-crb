@@ -201,23 +201,32 @@ const until = async (what, test, seconds, every = 1000) => {
 // ---- menus ----
 if (!await until("title", async () => (await frameCount().catch(() => 0)) > 300, 240, 2000)) await fail("the game never presented frames");
 log("title screen; continuing");
-await sleep(3000); // a click right at the first frames can come before the title takes input
-await click(600, 460);
-// "Load complete" (~500 draws) after the profile loads; Continue, then cancel the EA Nation
-// dialog (~600 draws) that the offline game raises right after it.
-if (!await until("load", async () => (await draws()) > 450, 90, 2000)) await fail("no Load complete screen");
-await sleep(3000);
-await press("Enter", 6000);
-let menu = false;
-for (let attempt = 0; attempt < 6 && !menu; attempt++) {
-  const d = await draws();
-  // The title screen draws as many as the dialog: a click that came too early (a fast machine)
-  // left the game there. The click again moves on from the title and misses the dialog's button.
-  if (d > 570) { log(`EA Nation dialog or title (${d.toFixed(0)} draws); clicking, cancelling`); await click(600, 460); await sleep(1500); await press("Enter", 6000); }
-  else if (d < 508) { log(`still on Load complete (${d.toFixed(0)} draws); Continue`); await press("Enter", 6000); }
-  else menu = true;
+// The screens follow one another in a fixed order, and their draw counts are too close to tell
+// them apart alone (2026-11-04 build: title ~700, Load complete ~526, EA Nation dialog ~595,
+// main menu ~534; earlier builds: Load complete under 508). So each step waits for the move
+// from the screen before: off the title (above 640) into Load complete, then Continue, then
+// the dialog (above 570) cancelled, then back below it to the main menu.
+const LOW = 450, DIALOG = 570, TITLE = 640;
+let left = false;
+for (let attempt = 0; attempt < 4 && !left; attempt++) {
+  // A click right at the first frames can come before the title takes input: click again.
+  await sleep(3000);
+  await click(600, 460);
+  left = await until("load", async () => { const d = await draws(); return d > LOW && d < DIALOG; }, 20, 1000);
 }
+if (!left) await fail("the title screen did not move on to Load complete");
+log("Load complete; Continue");
+await sleep(3000);
+await press("Enter", 0);
+// The offline game raises the EA Nation dialog right after Continue; cancel it once it is up.
+if (await until("dialog", async () => (await draws()) > DIALOG, 20, 1000)) {
+  await sleep(1500);
+  log("EA Nation dialog; cancelling");
+  await press("Enter", 0);
+}
+const menu = await until("menu", async () => { const d = await draws(); return d > LOW && d < DIALOG; }, 20, 1000);
 if (!menu) await fail("the main menu did not come up");
+await sleep(3000);
 log("main menu; Quick Race");
 for (let i = 0; i < 3; i++) await press("ArrowRight");
 await sleep(1500);
